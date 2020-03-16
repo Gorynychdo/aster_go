@@ -28,6 +28,8 @@ func (s *server) Start(configPath string) error {
 		return err
 	}
 
+	native.Logger = s.logger
+
 	s.client, err = native.Connect(options)
 	if err != nil {
 		s.logger.Error("Failed to build native ARI client", "error", err)
