@@ -6,6 +6,7 @@ type Config struct {
 	Password     string `toml:"password"`
 	URL          string `toml:"url"`
 	WebsocketURL string `toml:"websocket_url"`
+	DatabaseURL  string `toml:"database_url"`
 }
 
 func NewConfig() *Config {
@@ -15,5 +16,6 @@ func NewConfig() *Config {
 		Password:     "admin",
 		URL:          "http://localhost:8088/ari",
 		WebsocketURL: "ws://localhost:8088/ari/events",
+		DatabaseURL:  "host=localhost dbname=test sslmode=disable",
 	}
 }
