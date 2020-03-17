@@ -2,7 +2,6 @@ package ariserver
 
 import (
 	"context"
-	"github.com/BurntSushi/toml"
 	"github.com/CyCoreSystems/ari/v5"
 	"github.com/CyCoreSystems/ari/v5/client/native"
 	"github.com/inconshreveable/log15"
@@ -19,17 +18,17 @@ func NewServer() *server {
 	}
 }
 
-func (s *server) Start(configPath string) error {
-	options := &native.Options{}
-	_, err := toml.DecodeFile(configPath, options)
-	if err != nil {
-		s.logger.Error("Failed to read configuration", "error", err)
-		return err
-	}
-
+func (s *server) Start(config *Config) error {
 	native.Logger = s.logger
+	var err error
 
-	s.client, err = native.Connect(options)
+	s.client, err = native.Connect(&native.Options {
+		Application:  config.Application,
+		Username:     config.Username,
+		Password:     config.Password,
+		URL:          config.URL,
+		WebsocketURL: config.WebsocketURL,
+	})
 	if err != nil {
 		s.logger.Error("Failed to build native ARI client", "error", err)
 		return err

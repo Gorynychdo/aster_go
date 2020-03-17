@@ -2,7 +2,9 @@ package main
 
 import (
 	"flag"
+	"github.com/BurntSushi/toml"
 	"github.com/Gorynychdo/aster_go/internal/app/ariserver"
+	"log"
 )
 
 var (
@@ -16,9 +18,15 @@ func init() {
 func main() {
 	flag.Parse()
 
+	config := ariserver.NewConfig()
+	_, err := toml.DecodeFile(configPath, config)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	server := ariserver.NewServer()
 
-	if err := server.Start(configPath); err != nil {
+	if err := server.Start(config); err != nil {
 		return
 	}
 
