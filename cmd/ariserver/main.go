@@ -24,11 +24,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := ariserver.NewServer()
-
-	if err := server.Start(config); err != nil {
-		return
+	if err := ariserver.Start(config); err != nil {
+		log.Fatal(err)
 	}
-
-	server.Serve()
 }

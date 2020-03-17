@@ -12,13 +12,15 @@ type server struct {
 	client ari.Client
 }
 
-func NewServer() *server {
-	return &server{
+func newServer() *server {
+	s := &server{
 		logger: log15.New(),
 	}
+
+	return s
 }
 
-func (s *server) Start(config *Config) error {
+func (s *server) init(config *Config) error {
 	native.Logger = s.logger
 	var err error
 
@@ -38,18 +40,12 @@ func (s *server) Start(config *Config) error {
 	return nil
 }
 
-func (s *server) Serve() {
+func (s *server) serve() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	s.logger.Info("Starting listener app")
-	s.listenApp(ctx, s.channelHandler)
-}
+	s.logger.Info("Starting serve")
 
-func (s *server) listenApp(
-	ctx context.Context,
-	handler func(ctx context.Context, h *ari.ChannelHandle, args []string),
-	) {
 	sub := s.client.Bus().Subscribe(nil, "StasisStart")
 	end := s.client.Bus().Subscribe(nil, "StasisEnd")
 
@@ -58,7 +54,7 @@ func (s *server) listenApp(
 		case e := <-sub.Events():
 			v := e.(*ari.StasisStart)
 			s.logger.Info("Got stasis start", "channel", v.Channel.ID)
-			go handler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
+			go s.channelHandler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
 		case <-end.Events():
 			s.logger.Info("Got stasis end")
 		case <-ctx.Done():
