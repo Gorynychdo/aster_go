@@ -5,7 +5,6 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/CyCoreSystems/ari/v5"
 	"github.com/CyCoreSystems/ari/v5/client/native"
-	"github.com/CyCoreSystems/ari/v5/ext/play"
 	"github.com/inconshreveable/log15"
 )
 
@@ -48,7 +47,10 @@ func (s *server) Serve() {
 	s.listenApp(ctx, s.channelHandler)
 }
 
-func (s *server) listenApp(ctx context.Context, handler func(ctx context.Context, h *ari.ChannelHandle)) {
+func (s *server) listenApp(
+	ctx context.Context,
+	handler func(ctx context.Context, h *ari.ChannelHandle, args []string),
+	) {
 	sub := s.client.Bus().Subscribe(nil, "StasisStart")
 	end := s.client.Bus().Subscribe(nil, "StasisEnd")
 
@@ -57,7 +59,7 @@ func (s *server) listenApp(ctx context.Context, handler func(ctx context.Context
 		case e := <-sub.Events():
 			v := e.(*ari.StasisStart)
 			s.logger.Info("Got stasis start", "channel", v.Channel.ID)
-			go handler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)))
+			go handler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
 		case <-end.Events():
 			s.logger.Info("Got stasis end")
 		case <-ctx.Done():
@@ -66,16 +68,15 @@ func (s *server) listenApp(ctx context.Context, handler func(ctx context.Context
 	}
 }
 
-func (s *server) channelHandler(ctx context.Context, h *ari.ChannelHandle) {
+func (s *server) channelHandler(ctx context.Context, h *ari.ChannelHandle, args []string) {
 	s.logger.Info("Running channel handler")
+	s.logger.Info("Caller ID", "id", args[0])
+	s.logger.Info("Extension", "ext", args[1])
 
 	if err := h.Answer(); err != nil {
 		s.logger.Error("Failed to answer call", "error", err)
 	}
 
-	if err := play.Play(ctx, h, play.URI("sound:tt-monkeys")).Err(); err != nil {
-		s.logger.Error("Failed to play sound", "error", err)
-	}
-
+	s.logger.Info("Answering to call")
 	h.Hangup()
 }
