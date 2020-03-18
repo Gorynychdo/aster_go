@@ -32,6 +32,7 @@ func newServer(config *Config, store *store.Store, pusher *apns2.Client) (*serve
 		Password:     config.Password,
 		URL:          config.URL,
 		WebsocketURL: config.WebsocketURL,
+		SubscribeAll: true,
 	})
 	if err != nil {
 		s.logger.Error("Failed to build native ARI client", "error", err)
@@ -51,22 +52,27 @@ func (s *server) serve() {
 
 	sub := s.client.Bus().Subscribe(nil, "StasisStart")
 	end := s.client.Bus().Subscribe(nil, "StasisEnd")
+	con := s.client.Bus().Subscribe(nil, "ContactStatusChange")
 
 	for {
 		select {
 		case e := <-sub.Events():
 			v := e.(*ari.StasisStart)
 			s.logger.Info("Got stasis start", "channel", v.Channel.ID)
-			go s.channelHandler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
-		case <-end.Events():
-			s.logger.Info("Got stasis end")
+			go s.channelHandler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args, con)
+		case e := <-end.Events():
+			v := e.(*ari.StasisEnd)
+			s.logger.Info("Got stasis end", "channel", v.Channel.ID)
+		case e := <-con.Events():
+			v := e.(*ari.ContactStatusChange)
+			s.logger.Info("Contact status changed", "endpoint", v.Endpoint.Resource, "state", v.Endpoint.State)
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (s *server) channelHandler(ctx context.Context, h *ari.ChannelHandle, args []string) {
+func (s *server) channelHandler(ctx context.Context, h *ari.ChannelHandle, args []string, sub ari.Subscription) {
 	user, err := s.store.User().Find(args[1])
 	if err != nil {
 		s.logger.Error("Filed to find user", "error", err)
