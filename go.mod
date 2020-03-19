@@ -8,5 +8,5 @@ require (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible // indirect
 	github.com/go-sql-driver/mysql v1.5.0 // indirect
 	github.com/inconshreveable/log15 v0.0.0-20171019012758-0decfc6c20d9
-	github.com/sideshow/apns2 v0.20.0 // indirect
+	github.com/sideshow/apns2 v0.20.0
 )

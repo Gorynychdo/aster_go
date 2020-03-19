@@ -4,7 +4,7 @@ import (
 	"context"
 	"github.com/CyCoreSystems/ari/v5"
 	"github.com/CyCoreSystems/ari/v5/client/native"
-	"github.com/CyCoreSystems/ari/v5/ext/play"
+	"github.com/CyCoreSystems/ari/v5/rid"
 	"github.com/Gorynychdo/aster_go/internal/app/pusher"
 	"github.com/Gorynychdo/aster_go/internal/app/store"
 	"github.com/inconshreveable/log15"
@@ -12,30 +12,33 @@ import (
 
 type server struct {
 	logger log15.Logger
+	config *Config
 	client ari.Client
 	store  *store.Store
 	pusher *pusher.Pusher
+	bridge *ari.BridgeHandle
 }
 
 func newServer(config *Config, store *store.Store) (*server, error) {
 	s := &server{
 		logger: log15.New(),
+		config: config,
 		store:  store,
 	}
 
 	var err error
-	s.pusher, err = pusher.NewPusher(config.CertFile)
+	s.pusher, err = pusher.NewPusher(s.config.CertFile)
 	if err != nil {
 		return nil, err
 	}
 
 	native.Logger = s.logger
 	s.client, err = native.Connect(&native.Options{
-		Application:  config.Application,
-		Username:     config.Username,
-		Password:     config.Password,
-		URL:          config.URL,
-		WebsocketURL: config.WebsocketURL,
+		Application:  s.config.Application,
+		Username:     s.config.Username,
+		Password:     s.config.Password,
+		URL:          s.config.URL,
+		WebsocketURL: s.config.WebsocketURL,
 		SubscribeAll: true,
 	})
 	if err != nil {
@@ -63,7 +66,12 @@ func (s *server) serve() {
 		case e := <-sub.Events():
 			v := e.(*ari.StasisStart)
 			s.logger.Info("Got stasis start", "channel", v.Channel.ID)
-			go s.channelHandler(ctx, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args, con)
+
+			if len(v.Args) == 2 {
+				go s.channelHandler(s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
+			} else {
+				go s.answerHandle(s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)))
+			}
 		case e := <-end.Events():
 			v := e.(*ari.StasisEnd)
 			s.logger.Info("Got stasis end", "channel", v.Channel.ID)
@@ -76,7 +84,7 @@ func (s *server) serve() {
 	}
 }
 
-func (s *server) channelHandler(ctx context.Context, h *ari.ChannelHandle, args []string, sub ari.Subscription) {
+func (s *server) channelHandler(h *ari.ChannelHandle, args []string) {
 	caller, callee := args[0], args[1]
 	s.logger.Info("Calling", "caller", caller, "callee", callee)
 
@@ -89,20 +97,45 @@ func (s *server) channelHandler(ctx context.Context, h *ari.ChannelHandle, args 
 
 	if err := s.pusher.Push(user.DeviceToken, caller); err != nil {
 		s.logger.Error("Push notification failed", "error", err)
-	}
-
-	if err := h.Answer(); err != nil {
-		s.logger.Error("failed to answer call", "error", err)
 		h.Hangup()
 		return
 	}
 
-	s.logger.Info("Answering to call")
-
-	if err := play.Play(ctx, h, play.URI("sound:tt-monkeys")).Err(); err != nil {
-		s.logger.Error("failed to play sound", "error", err)
+	brKey := ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
+	s.bridge, err = s.client.Bridge().Create(brKey, "proxy", brKey.ID)
+	if err != nil {
+		s.logger.Error("Failed to create bridge", "error", err)
+		h.Hangup()
 		return
 	}
 
-	h.Hangup()
+	if err := s.bridge.AddChannel(h.ID()); err != nil {
+		s.logger.Error("Failed to add channel to bridge", "error", err)
+		s.bridge.Delete()
+		h.Hangup()
+		return
+	}
+
+	_, err = h.Originate(ari.OriginateRequest{
+		Endpoint: ari.EndpointID("PJSIP", callee),
+		Timeout:  30,
+		App:      s.config.Application,
+	})
+	if err != nil {
+		s.logger.Error("Failed to dialing", "error", err)
+		h.Hangup()
+		return
+	}
+}
+
+func (s *server) answerHandle(h *ari.ChannelHandle) {
+	if s.bridge == nil {
+		s.logger.Error("No bridge to answer")
+		return
+	}
+
+	if err := s.bridge.AddChannel(h.ID()); err != nil {
+		s.logger.Error("Failed to add channel to bridge", "error", err)
+		h.Hangup()
+	}
 }
