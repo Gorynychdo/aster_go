@@ -8,6 +8,7 @@ import (
 	"github.com/Gorynychdo/aster_go/internal/app/pusher"
 	"github.com/Gorynychdo/aster_go/internal/app/store"
 	"github.com/inconshreveable/log15"
+	"sync"
 )
 
 type server struct {
@@ -16,7 +17,6 @@ type server struct {
 	client ari.Client
 	store  *store.Store
 	pusher *pusher.Pusher
-	bridge *ari.BridgeHandle
 }
 
 func newServer(config *Config, store *store.Store) (*server, error) {
@@ -69,8 +69,6 @@ func (s *server) serve() {
 
 			if len(v.Args) == 2 {
 				go s.channelHandler(s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
-			} else {
-				go s.answerHandle(s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)))
 			}
 		case e := <-end.Events():
 			v := e.(*ari.StasisEnd)
@@ -84,58 +82,109 @@ func (s *server) serve() {
 	}
 }
 
-func (s *server) channelHandler(h *ari.ChannelHandle, args []string) {
+func (s *server) channelHandler(ch *ari.ChannelHandle, args []string) {
 	caller, callee := args[0], args[1]
+
 	s.logger.Info("Calling", "caller", caller, "callee", callee)
 
 	user, err := s.store.User().Find(callee)
 	if err != nil {
 		s.logger.Error("Filed to find user", "error", err)
-		h.Hangup()
+		s.safeHangup(ch)
 		return
 	}
 
 	if err := s.pusher.Push(user.DeviceToken, caller); err != nil {
 		s.logger.Error("Push notification failed", "error", err)
-		h.Hangup()
+		s.safeHangup(ch)
 		return
 	}
 
-	brKey := ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
-	s.bridge, err = s.client.Bridge().Create(brKey, "proxy", brKey.ID)
-	if err != nil {
-		s.logger.Error("Failed to create bridge", "error", err)
-		h.Hangup()
-		return
-	}
-
-	if err := s.bridge.AddChannel(h.ID()); err != nil {
-		s.logger.Error("Failed to add channel to bridge", "error", err)
-		s.bridge.Delete()
-		h.Hangup()
-		return
-	}
-
-	_, err = h.Originate(ari.OriginateRequest{
+	or, err := ch.Originate(ari.OriginateRequest{
 		Endpoint: ari.EndpointID("PJSIP", callee),
 		Timeout:  30,
 		App:      s.config.Application,
+		Variables: map[string]string{
+			"direct_media":    "no",
+			"force_rport":     "yes",
+			"rewrite_contact": "yes",
+			"rtp_symmetric":   "yes",
+		},
 	})
 	if err != nil {
 		s.logger.Error("Failed to dialing", "error", err)
-		h.Hangup()
+		s.safeHangup(ch)
 		return
+	}
+
+	chEnd := ch.Subscribe(ari.Events.StasisEnd)
+	orEnd := or.Subscribe(ari.Events.StasisEnd)
+	orStart := or.Subscribe(ari.Events.StasisStart)
+
+	var br *ari.BridgeHandle
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-orStart.Events():
+				if err := ch.Answer(); err != nil {
+					s.logger.Error("failed to answer call", "error", err)
+					s.safeHangup(ch)
+					return
+				}
+
+				brKey := ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
+				br, err = s.client.Bridge().Create(brKey, "mixing", brKey.ID)
+				if err != nil {
+					s.logger.Error("Failed to create bridge", "error", err)
+					s.safeHangup(ch)
+					return
+				}
+
+				if err := br.AddChannel(ch.ID()); err != nil {
+					s.logger.Error("Failed to add channel to bridge", "channel", ch.ID(), "error", err)
+					s.safeBridgeDestroy(br)
+					s.safeHangup(ch)
+					return
+				}
+
+				if err := br.AddChannel(or.ID()); err != nil {
+					s.logger.Error("Failed to add channel to bridge", "channel", or.ID(), "error", err)
+					s.safeBridgeDestroy(br)
+					s.safeHangup(or)
+					return
+				}
+			case <-orEnd.Events():
+				s.safeBridgeDestroy(br)
+				s.safeHangup(ch)
+				return
+			case <-chEnd.Events():
+				s.safeBridgeDestroy(br)
+				s.safeHangup(or)
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+func (s *server) safeHangup(ch *ari.ChannelHandle) {
+	if err := ch.Hangup(); err != nil {
+		s.logger.Error("Failed to hangup channel", "error", err)
 	}
 }
 
-func (s *server) answerHandle(h *ari.ChannelHandle) {
-	if s.bridge == nil {
-		s.logger.Error("No bridge to answer")
+func (s *server) safeBridgeDestroy(br *ari.BridgeHandle) {
+	if br == nil {
 		return
 	}
 
-	if err := s.bridge.AddChannel(h.ID()); err != nil {
-		s.logger.Error("Failed to add channel to bridge", "error", err)
-		h.Hangup()
+	if err := br.Delete(); err != nil {
+		s.logger.Error("Failed to destroy bridge", "error", err)
 	}
 }
