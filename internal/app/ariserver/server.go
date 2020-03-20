@@ -4,11 +4,11 @@ import (
 	"context"
 	"github.com/CyCoreSystems/ari/v5"
 	"github.com/CyCoreSystems/ari/v5/client/native"
-	"github.com/CyCoreSystems/ari/v5/rid"
 	"github.com/Gorynychdo/aster_go/internal/app/pusher"
 	"github.com/Gorynychdo/aster_go/internal/app/store"
 	"github.com/inconshreveable/log15"
 	"sync"
+	"time"
 )
 
 type server struct {
@@ -17,6 +17,7 @@ type server struct {
 	client ari.Client
 	store  *store.Store
 	pusher *pusher.Pusher
+	conns  map[string]*connection
 }
 
 func newServer(config *Config, store *store.Store) (*server, error) {
@@ -24,6 +25,7 @@ func newServer(config *Config, store *store.Store) (*server, error) {
 		logger: log15.New(),
 		config: config,
 		store:  store,
+		conns:  make(map[string]*connection),
 	}
 
 	var err error
@@ -59,7 +61,7 @@ func (s *server) serve() {
 
 	sub := s.client.Bus().Subscribe(nil, "StasisStart")
 	end := s.client.Bus().Subscribe(nil, "StasisEnd")
-	con := s.client.Bus().Subscribe(nil, "ContactStatusChange")
+	st := s.client.Bus().Subscribe(nil, "ContactStatusChange")
 
 	for {
 		select {
@@ -68,40 +70,55 @@ func (s *server) serve() {
 			s.logger.Info("Got stasis start", "channel", v.Channel.ID)
 
 			if len(v.Args) == 2 {
-				go s.channelHandler(s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
+				caller, callee := v.Args[0], v.Args[1]
+				s.logger.Info("Calling", "caller", caller, "callee", callee)
+				s.conns[callee] = newConnection(caller, callee, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), s)
+				s.logger.Debug("Connections", "conns", s.conns)
+
+				go s.channelHandler(s.conns[callee])
 			}
 		case e := <-end.Events():
 			v := e.(*ari.StasisEnd)
 			s.logger.Info("Got stasis end", "channel", v.Channel.ID)
-		case e := <-con.Events():
+		case e := <-st.Events():
 			v := e.(*ari.ContactStatusChange)
 			s.logger.Info("Contact status changed", "endpoint", v.Endpoint.Resource, "state", v.Endpoint.State)
+
+			con, ok := s.conns[v.Endpoint.Resource]
+			if ok && v.Endpoint.State == "online" {
+				con.ch <- 1
+				close(con.ch)
+			}
 		case <-ctx.Done():
 			return
 		}
 	}
 }
 
-func (s *server) channelHandler(ch *ari.ChannelHandle, args []string) {
-	caller, callee := args[0], args[1]
-
-	s.logger.Info("Calling", "caller", caller, "callee", callee)
-
-	user, err := s.store.User().Find(callee)
+func (s *server) channelHandler(conn *connection) {
+	user, err := s.store.User().Find(conn.callee)
 	if err != nil {
 		s.logger.Error("Filed to find user", "error", err)
-		s.safeHangup(ch)
+		conn.close()
 		return
 	}
 
-	if err := s.pusher.Push(user.DeviceToken, caller); err != nil {
+	if err := s.pusher.Push(user.DeviceToken, conn.caller); err != nil {
 		s.logger.Error("Push notification failed", "error", err)
-		s.safeHangup(ch)
+		conn.close()
 		return
 	}
 
-	or, err := ch.Originate(ari.OriginateRequest{
-		Endpoint: ari.EndpointID("PJSIP", callee),
+	select {
+	case <-conn.ch:
+		break
+	case <-time.After(30 * time.Second):
+		conn.close()
+		return
+	}
+
+	conn.calleeHandler, err = conn.callerHandler.Originate(ari.OriginateRequest{
+		Endpoint: ari.EndpointID("PJSIP", conn.callee),
 		Timeout:  30,
 		App:      s.config.Application,
 		Variables: map[string]string{
@@ -113,15 +130,14 @@ func (s *server) channelHandler(ch *ari.ChannelHandle, args []string) {
 	})
 	if err != nil {
 		s.logger.Error("Failed to dialing", "error", err)
-		s.safeHangup(ch)
+		conn.close()
 		return
 	}
 
-	chEnd := ch.Subscribe(ari.Events.StasisEnd)
-	orEnd := or.Subscribe(ari.Events.StasisEnd)
-	orStart := or.Subscribe(ari.Events.StasisStart)
+	chEnd := conn.callerHandler.Subscribe(ari.Events.StasisEnd)
+	orEnd := conn.calleeHandler.Subscribe(ari.Events.StasisEnd)
+	orStart := conn.calleeHandler.Subscribe(ari.Events.StasisStart)
 
-	var br *ari.BridgeHandle
 	var wg sync.WaitGroup
 
 	wg.Add(1)
@@ -131,60 +147,26 @@ func (s *server) channelHandler(ch *ari.ChannelHandle, args []string) {
 		for {
 			select {
 			case <-orStart.Events():
-				if err := ch.Answer(); err != nil {
+				if err := conn.callerHandler.Answer(); err != nil {
 					s.logger.Error("failed to answer call", "error", err)
-					s.safeHangup(ch)
+					conn.close()
 					return
 				}
 
-				brKey := ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
-				br, err = s.client.Bridge().Create(brKey, "mixing", brKey.ID)
-				if err != nil {
-					s.logger.Error("Failed to create bridge", "error", err)
-					s.safeHangup(ch)
-					return
-				}
-
-				if err := br.AddChannel(ch.ID()); err != nil {
-					s.logger.Error("Failed to add channel to bridge", "channel", ch.ID(), "error", err)
-					s.safeBridgeDestroy(br)
-					s.safeHangup(ch)
-					return
-				}
-
-				if err := br.AddChannel(or.ID()); err != nil {
-					s.logger.Error("Failed to add channel to bridge", "channel", or.ID(), "error", err)
-					s.safeBridgeDestroy(br)
-					s.safeHangup(or)
+				if err := conn.createBridge(); err != nil {
 					return
 				}
 			case <-orEnd.Events():
-				s.safeBridgeDestroy(br)
-				s.safeHangup(ch)
+				conn.calleeHandler = nil
+				conn.close()
 				return
 			case <-chEnd.Events():
-				s.safeBridgeDestroy(br)
-				s.safeHangup(or)
+				conn.callerHandler = nil
+				conn.close()
 				return
 			}
 		}
 	}()
 
 	wg.Wait()
-}
-
-func (s *server) safeHangup(ch *ari.ChannelHandle) {
-	if err := ch.Hangup(); err != nil {
-		s.logger.Error("Failed to hangup channel", "error", err)
-	}
-}
-
-func (s *server) safeBridgeDestroy(br *ari.BridgeHandle) {
-	if br == nil {
-		return
-	}
-
-	if err := br.Delete(); err != nil {
-		s.logger.Error("Failed to destroy bridge", "error", err)
-	}
 }
