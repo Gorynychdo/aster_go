@@ -13,9 +13,9 @@ func Start(config *Config) error {
 	}
 
 	defer db.Close()
-	store := store.New(db)
+	st := store.New(db)
 
-	srv, err := newServer(config, store)
+	srv, err := newServer(config, st)
 	if err != nil {
 		return err
 	}

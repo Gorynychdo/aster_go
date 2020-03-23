@@ -7,8 +7,6 @@ import (
 	"github.com/Gorynychdo/aster_go/internal/app/pusher"
 	"github.com/Gorynychdo/aster_go/internal/app/store"
 	"github.com/inconshreveable/log15"
-	"sync"
-	"time"
 )
 
 type server struct {
@@ -70,12 +68,10 @@ func (s *server) serve() {
 			s.logger.Info("Got stasis start", "channel", v.Channel.ID)
 
 			if len(v.Args) == 2 {
-				caller, callee := v.Args[0], v.Args[1]
-				s.logger.Info("Calling", "caller", caller, "callee", callee)
-				s.conns[callee] = newConnection(caller, callee, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), s)
+				con := newConnection(s, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
+				s.conns[con.callee] = con
 				s.logger.Debug("Connections", "conns", s.conns)
-
-				go s.channelHandler(s.conns[callee])
+				go con.handle()
 			}
 		case e := <-end.Events():
 			v := e.(*ari.StasisEnd)
@@ -93,80 +89,4 @@ func (s *server) serve() {
 			return
 		}
 	}
-}
-
-func (s *server) channelHandler(conn *connection) {
-	user, err := s.store.User().Find(conn.callee)
-	if err != nil {
-		s.logger.Error("Filed to find user", "error", err)
-		conn.close()
-		return
-	}
-
-	if err := s.pusher.Push(user.DeviceToken, conn.caller); err != nil {
-		s.logger.Error("Push notification failed", "error", err)
-		conn.close()
-		return
-	}
-
-	select {
-	case <-conn.ch:
-		break
-	case <-time.After(30 * time.Second):
-		conn.close()
-		return
-	}
-
-	conn.calleeHandler, err = conn.callerHandler.Originate(ari.OriginateRequest{
-		Endpoint: ari.EndpointID("PJSIP", conn.callee),
-		Timeout:  30,
-		App:      s.config.Application,
-		Variables: map[string]string{
-			"direct_media":    "no",
-			"force_rport":     "yes",
-			"rewrite_contact": "yes",
-			"rtp_symmetric":   "yes",
-		},
-	})
-	if err != nil {
-		s.logger.Error("Failed to dialing", "error", err)
-		conn.close()
-		return
-	}
-
-	chEnd := conn.callerHandler.Subscribe(ari.Events.StasisEnd)
-	orEnd := conn.calleeHandler.Subscribe(ari.Events.StasisEnd)
-	orStart := conn.calleeHandler.Subscribe(ari.Events.StasisStart)
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for {
-			select {
-			case <-orStart.Events():
-				if err := conn.callerHandler.Answer(); err != nil {
-					s.logger.Error("failed to answer call", "error", err)
-					conn.close()
-					return
-				}
-
-				if err := conn.createBridge(); err != nil {
-					return
-				}
-			case <-orEnd.Events():
-				conn.calleeHandler = nil
-				conn.close()
-				return
-			case <-chEnd.Events():
-				conn.callerHandler = nil
-				conn.close()
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
 }
