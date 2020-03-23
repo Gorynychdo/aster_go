@@ -1,6 +1,8 @@
 package ariserver
 
 import (
+	"context"
+	"errors"
 	"github.com/CyCoreSystems/ari/v5"
 	"github.com/CyCoreSystems/ari/v5/rid"
 	"sync"
@@ -11,7 +13,7 @@ type connection struct {
 	*server
 	caller        string
 	callee        string
-	ch            chan int
+	ch            chan bool
 	callerHandler *ari.ChannelHandle
 	calleeHandler *ari.ChannelHandle
 	bridge        *ari.BridgeHandle
@@ -23,14 +25,151 @@ func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection 
 		callerHandler: ch,
 		caller:        args[0],
 		callee:        args[1],
-		ch:            make(chan int, 1),
+		ch:            make(chan bool, 1),
 	}
 
-	c.logger.Info("Calling", "caller", c.caller, "callee", c.callee)
+	c.logger.Info("Calling", "channel", c.callerHandler.ID(), "caller", c.caller, "callee", c.callee)
+	c.conns[c.callee] = c
 	return c
 }
 
 func (c *connection) handle() {
+	defer c.logger.Debug("Leave handler")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	end := c.callerHandler.Subscribe(ari.Events.StasisEnd)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-end.Events():
+			c.callerHandler = nil
+			c.close()
+			cancel()
+			return
+		}
+	}()
+
+	success := make(chan bool, 1)
+	fail := make(chan bool, 1)
+
+	wg.Add(1)
+	go c.callEndpoint(ctx, &wg, success, fail)
+
+	select {
+	case <-success:
+		break
+	case <-fail:
+		return
+	}
+
+	if err := c.dial(); err != nil {
+		return
+	}
+
+	calleeStart := c.calleeHandler.Subscribe(ari.Events.StasisStart)
+	calleeEnd := c.calleeHandler.Subscribe(ari.Events.StasisEnd)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-calleeStart.Events():
+				if err := c.callerHandler.Answer(); err != nil {
+					c.logger.Error("failed to answer call", "channel", c.callerHandler.ID(), "error", err)
+					c.close()
+					return
+				}
+
+				if err := c.createBridge(); err != nil {
+					return
+				}
+			case <-calleeEnd.Events():
+				c.calleeHandler = nil
+				c.close()
+				return
+			}
+		}
+	}()
+}
+
+func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, success, fail chan<- bool) {
+	defer wg.Done()
+	defer close(success)
+	defer close(fail)
+
+	epReady, err := c.checkEndpoint()
+	if err != nil {
+		fail <- true
+		return
+	}
+
+	if epReady {
+		success <- true
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+		fail <- true
+		return
+	case <-c.ch:
+		success <- true
+		return
+	case <-time.After(30 * time.Second):
+		c.close()
+		c.logger.Info("Endpoint calling timeout", "endpoint", c.callee)
+		fail <- true
+		return
+	}
+}
+
+func (c *connection) checkEndpoint() (epReady bool, err error) {
+	epReady = false
+	ep := c.client.Endpoint()
+	eph := ep.Get(ari.NewKey(ari.EndpointKey, ari.EndpointID("PJSIP", c.callee)))
+
+	data, err := eph.Data()
+	if err != nil {
+		c.logger.Error("Failed to get endpoint state", "endpoint", c.callee, "error", err)
+		c.close()
+		return
+	}
+
+	c.logger.Info("Callee endpoint data", "endpoint", data)
+
+	if data.State == "online" {
+		if len(data.ChannelIDs) > 0 {
+			c.logger.Info("Endpoint is busy", "endpoint", c.callee)
+
+			if err := c.callerHandler.Busy(); err != nil {
+				c.logger.Error("Failed to send busy", "channel", c.callerHandler.ID(), "error", err)
+				c.close()
+			} else {
+				c.callerHandler = nil
+				c.close()
+			}
+
+			err = errors.New("endpoint is busy")
+		} else {
+			epReady = true
+		}
+		return
+	}
+
 	user, err := c.store.User().Find(c.callee)
 	if err != nil {
 		c.logger.Error("Filed to find user", "error", err)
@@ -38,20 +177,16 @@ func (c *connection) handle() {
 		return
 	}
 
-	if err := c.pusher.Push(user.DeviceToken, c.caller); err != nil {
+	if err = c.pusher.Push(user.DeviceToken, c.caller); err != nil {
 		c.logger.Error("Push notification failed", "error", err)
 		c.close()
 		return
 	}
 
-	select {
-	case <-c.ch:
-		break
-	case <-time.After(30 * time.Second):
-		c.close()
-		return
-	}
+	return
+}
 
+func (c *connection) dial() (err error) {
 	c.calleeHandler, err = c.callerHandler.Originate(ari.OriginateRequest{
 		Endpoint: ari.EndpointID("PJSIP", c.callee),
 		Timeout:  30,
@@ -64,53 +199,18 @@ func (c *connection) handle() {
 		},
 	})
 	if err != nil {
-		c.logger.Error("Failed to dialing", "error", err)
+		c.logger.Error("Failed to dialing", "channel", c.callerHandler.ID(), "error", err)
 		c.close()
-		return
 	}
 
-	chEnd := c.callerHandler.Subscribe(ari.Events.StasisEnd)
-	orEnd := c.calleeHandler.Subscribe(ari.Events.StasisEnd)
-	orStart := c.calleeHandler.Subscribe(ari.Events.StasisStart)
-
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for {
-			select {
-			case <-orStart.Events():
-				if err := c.callerHandler.Answer(); err != nil {
-					c.logger.Error("failed to answer call", "error", err)
-					c.close()
-					return
-				}
-
-				if err := c.createBridge(); err != nil {
-					return
-				}
-			case <-orEnd.Events():
-				c.calleeHandler = nil
-				c.close()
-				return
-			case <-chEnd.Events():
-				c.callerHandler = nil
-				c.close()
-				return
-			}
-		}
-	}()
-
-	wg.Wait()
+	return
 }
 
 func (c *connection) createBridge() (err error) {
 	brKey := ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
 	c.bridge, err = c.client.Bridge().Create(brKey, "mixing", brKey.ID)
 	if err != nil {
-		c.logger.Error("Failed to create bridge", "error", err)
+		c.logger.Error("Failed to create bridge", "channel", c.callerHandler.ID(), "error", err)
 		c.close()
 		return
 	}
@@ -136,6 +236,7 @@ func (c *connection) close() {
 		if err := c.bridge.Delete(); err != nil {
 			c.logger.Error("Bridge destroy failed", "bridge", c.bridge.ID(), "error", err)
 		}
+		c.bridge = nil
 	}
 
 	if c.callerHandler != nil {
@@ -151,5 +252,4 @@ func (c *connection) close() {
 	}
 
 	delete(c.conns, c.callee)
-	c.logger.Debug("Connections", "conns", c.conns)
 }

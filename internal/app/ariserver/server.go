@@ -69,8 +69,6 @@ func (s *server) serve() {
 
 			if len(v.Args) == 2 {
 				con := newConnection(s, s.client.Channel().Get(v.Key(ari.ChannelKey, v.Channel.ID)), v.Args)
-				s.conns[con.callee] = con
-				s.logger.Debug("Connections", "conns", s.conns)
 				go con.handle()
 			}
 		case e := <-end.Events():
@@ -82,7 +80,7 @@ func (s *server) serve() {
 
 			con, ok := s.conns[v.Endpoint.Resource]
 			if ok && v.Endpoint.State == "online" {
-				con.ch <- 1
+				con.ch <- true
 				close(con.ch)
 			}
 		case <-ctx.Done():
