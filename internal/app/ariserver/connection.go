@@ -3,10 +3,11 @@ package ariserver
 import (
 	"context"
 	"errors"
-	"github.com/CyCoreSystems/ari/v5"
-	"github.com/CyCoreSystems/ari/v5/rid"
 	"sync"
 	"time"
+
+	"github.com/CyCoreSystems/ari/v5"
+	"github.com/CyCoreSystems/ari/v5/rid"
 )
 
 type connection struct {
@@ -34,13 +35,14 @@ func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection 
 }
 
 func (c *connection) handle() {
-	defer c.logger.Debug("Leave handler")
-
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	var wg sync.WaitGroup
-	defer wg.Wait()
+
+	defer func() {
+		wg.Wait()
+		cancel()
+		c.logger.Debug("Leave handler")
+	}()
 
 	end := c.callerHandler.Subscribe(ari.Events.StasisEnd)
 
@@ -107,9 +109,11 @@ func (c *connection) handle() {
 }
 
 func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, success, fail chan<- bool) {
-	defer wg.Done()
-	defer close(success)
-	defer close(fail)
+	defer func() {
+		close(fail)
+		close(success)
+		wg.Done()
+	}()
 
 	epReady, err := c.checkEndpoint()
 	if err != nil {
@@ -154,15 +158,7 @@ func (c *connection) checkEndpoint() (epReady bool, err error) {
 	if data.State == "online" {
 		if len(data.ChannelIDs) > 0 {
 			c.logger.Info("Endpoint is busy", "endpoint", c.callee)
-
-			if err := c.callerHandler.Busy(); err != nil {
-				c.logger.Error("Failed to send busy", "channel", c.callerHandler.ID(), "error", err)
-				c.close()
-			} else {
-				c.callerHandler = nil
-				c.close()
-			}
-
+			c.close()
 			err = errors.New("endpoint is busy")
 		} else {
 			epReady = true

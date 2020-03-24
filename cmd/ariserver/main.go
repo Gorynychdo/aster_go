@@ -2,9 +2,10 @@ package main
 
 import (
 	"flag"
+	"log"
+
 	"github.com/BurntSushi/toml"
 	"github.com/Gorynychdo/aster_go/internal/app/ariserver"
-	"log"
 )
 
 var (

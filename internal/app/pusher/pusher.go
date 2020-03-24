@@ -2,6 +2,7 @@ package pusher
 
 import (
 	"errors"
+
 	"github.com/sideshow/apns2"
 	"github.com/sideshow/apns2/certificate"
 	"github.com/sideshow/apns2/payload"
