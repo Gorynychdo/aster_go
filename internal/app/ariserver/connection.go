@@ -41,7 +41,6 @@ func (c *connection) handle() {
 	defer func() {
 		wg.Wait()
 		cancel()
-		c.logger.Debug("Leave handler")
 	}()
 
 	end := c.callerHandler.Subscribe(ari.Events.StasisEnd)
@@ -80,6 +79,7 @@ func (c *connection) handle() {
 
 	calleeStart := c.calleeHandler.Subscribe(ari.Events.StasisStart)
 	calleeEnd := c.calleeHandler.Subscribe(ari.Events.StasisEnd)
+	hangup := c.calleeHandler.Subscribe(ari.Events.ChannelHangupRequest)
 
 	wg.Add(1)
 	go func() {
@@ -100,6 +100,11 @@ func (c *connection) handle() {
 					return
 				}
 			case <-calleeEnd.Events():
+				c.calleeHandler = nil
+				c.close()
+				return
+			case <-hangup.Events():
+				c.logger.Info("Callee sent hangup", "endpoint", c.callee)
 				c.calleeHandler = nil
 				c.close()
 				return
