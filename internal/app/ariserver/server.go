@@ -27,6 +27,11 @@ func newServer(config *Config, store *store.Store) (*server, error) {
 		conns:  make(map[string]*connection),
 	}
 
+	s.logger.SetHandler(log15.MultiHandler(
+		log15.Must.FileHandler("logs/app.log", log15.LogfmtFormat()),
+		log15.StderrHandler),
+	)
+
 	var err error
 	s.pusher, err = pusher.NewPusher(s.config.CertFile)
 	if err != nil {

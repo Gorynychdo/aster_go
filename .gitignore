@@ -23,5 +23,11 @@
 # Configuration
 configs/
 
+# System init and process manager/supervisor configs
+init/
+
+# Logs
+logs/
+
 # Executable file
 /ariserver

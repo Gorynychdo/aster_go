@@ -147,7 +147,6 @@ func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, succe
 }
 
 func (c *connection) checkEndpoint() (epReady bool, err error) {
-	epReady = false
 	ep := c.client.Endpoint()
 	eph := ep.Get(ari.NewKey(ari.EndpointKey, ari.EndpointID("PJSIP", c.callee)))
 
