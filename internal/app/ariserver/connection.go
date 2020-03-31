@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -22,10 +23,12 @@ type connection struct {
 	caller        string
 	callee        string
 	calleeToken   string
-	ch            chan bool
+	connect       chan bool
 	callerHandler *ari.ChannelHandle
 	calleeHandler *ari.ChannelHandle
 	bridge        *ari.BridgeHandle
+	callerRec     *ari.LiveRecordingHandle
+	calleeRec     *ari.LiveRecordingHandle
 }
 
 func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection {
@@ -34,7 +37,7 @@ func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection 
 		callerHandler: ch,
 		caller:        args[0],
 		callee:        args[1],
-		ch:            make(chan bool, 1),
+		connect:       make(chan bool, 1),
 	}
 
 	c.logger.Info("Calling", "channel", c.callerHandler.ID(), "caller", c.caller, "callee", c.callee)
@@ -160,10 +163,10 @@ func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, errCh
 	case <-ctx.Done():
 		errCh <- errCancelled
 		return
-	case <-c.ch:
+	case <-c.connect:
 		errCh <- nil
 		return
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		errCh <- errCallTimeout
 		return
 	}
@@ -226,8 +229,13 @@ func (c *connection) dial() (err error) {
 
 func (c *connection) createBridge() error {
 	var (
-		err   error
-		brKey = ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
+		err     error
+		brKey   = ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
+		now     = strconv.FormatInt(time.Now().UnixNano(), 10)
+		recOpts = &ari.RecordingOptions{
+			Format: "wav",
+			Exists: "overwrite",
+		}
 	)
 
 	c.bridge, err = c.client.Bridge().Create(brKey, "mixing", brKey.ID)
@@ -243,12 +251,38 @@ func (c *connection) createBridge() error {
 		return fmt.Errorf("failed to add callee to bridge: %v", err)
 	}
 
-	c.logger.Info("Bridge created", "channel", c.calleeHandler.ID(), "bridge", c.bridge.ID())
+	c.logger.Info("Bridge created", "channel", c.callerHandler.ID(), "bridge", c.bridge.ID())
+
+	c.callerRec, err = c.bridge.Record("caller_"+now, recOpts)
+	if err != nil {
+		return fmt.Errorf("failed to create caller recorder: %v", err)
+	}
+
+	c.logger.Info("Caller recorder created", "bridge", c.bridge.ID(), "recorder", c.callerRec.ID())
+
+	c.calleeRec, err = c.bridge.Record("callee_"+now, recOpts)
+	if err != nil {
+		return fmt.Errorf("failed to create callee recorder: %v", err)
+	}
+
+	c.logger.Info("Callee recorder created", "bridge", c.bridge.ID(), "recorder", c.calleeRec.ID())
 
 	return nil
 }
 
 func (c *connection) close() {
+	if c.callerRec != nil {
+		if err := c.callerRec.Stop(); err != nil {
+			c.logger.Error("Failed to stop caller recorder", "recorder", c.callerRec.ID())
+		}
+	}
+
+	if c.calleeRec != nil {
+		if err := c.calleeRec.Stop(); err != nil {
+			c.logger.Error("Failed to stop callee recorder", "recorder", c.calleeRec.ID())
+		}
+	}
+
 	if c.bridge != nil {
 		if err := c.bridge.Delete(); err != nil {
 			c.logger.Error("Bridge destroy failed", "bridge", c.bridge.ID(), "error", err)

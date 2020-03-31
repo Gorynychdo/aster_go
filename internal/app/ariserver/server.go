@@ -86,8 +86,8 @@ func (s *server) serve() {
 
 			con, ok := s.conns[v.Endpoint.Resource]
 			if ok && v.Endpoint.State == "online" {
-				con.ch <- true
-				close(con.ch)
+				con.connect <- true
+				close(con.connect)
 			}
 		case <-ctx.Done():
 			return
