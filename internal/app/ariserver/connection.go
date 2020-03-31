@@ -3,6 +3,7 @@ package ariserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -10,10 +11,17 @@ import (
 	"github.com/CyCoreSystems/ari/v5/rid"
 )
 
+var (
+	errCancelled   = errors.New("cancelled")
+	errCallTimeout = errors.New("endpoint call timeout")
+	errBusy        = errors.New("endpoint is busy")
+)
+
 type connection struct {
 	*server
 	caller        string
 	callee        string
+	calleeToken   string
 	ch            chan bool
 	callerHandler *ari.ChannelHandle
 	calleeHandler *ari.ChannelHandle
@@ -35,15 +43,21 @@ func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection 
 }
 
 func (c *connection) handle() {
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
+	var (
+		wg          sync.WaitGroup
+		ctx, cancel = context.WithCancel(context.Background())
+		end         = c.callerHandler.Subscribe(ari.Events.StasisEnd)
+		early       = make(chan bool, 1)
+		callErr     = make(chan error, 1)
+	)
 
 	defer func() {
 		wg.Wait()
 		cancel()
+		close(early)
+		close(callErr)
+		c.logger.Debug("Leave handler")
 	}()
-
-	end := c.callerHandler.Subscribe(ari.Events.StasisEnd)
 
 	wg.Add(1)
 	go func() {
@@ -52,7 +66,11 @@ func (c *connection) handle() {
 		select {
 		case <-ctx.Done():
 			return
+		case <-early:
+			return
 		case <-end.Events():
+			c.logger.Debug("Push cancel")
+			c.pushCancel()
 			c.callerHandler = nil
 			c.close()
 			cancel()
@@ -60,20 +78,29 @@ func (c *connection) handle() {
 		}
 	}()
 
-	success := make(chan bool, 1)
-	fail := make(chan bool, 1)
-
 	wg.Add(1)
-	go c.callEndpoint(ctx, &wg, success, fail)
+	go c.callEndpoint(ctx, &wg, callErr)
 
-	select {
-	case <-success:
-		break
-	case <-fail:
+	if err := <-callErr; err != nil {
+		switch err {
+		case errCancelled:
+			fallthrough
+		case errCallTimeout:
+			fallthrough
+		case errBusy:
+			c.logger.Info("Call endpoint failed", "endpoint", c.callee, "reason", err)
+		default:
+			c.logger.Error("Call endpoint failed", "endpoint", c.callee, "error", err)
+		}
+		c.close()
 		return
 	}
 
+	early <- true
+
 	if err := c.dial(); err != nil {
+		c.logger.Error("Failed to dialing", "channel", c.callerHandler.ID(), "error", err)
+		c.close()
 		return
 	}
 
@@ -97,6 +124,8 @@ func (c *connection) handle() {
 				}
 
 				if err := c.createBridge(); err != nil {
+					c.logger.Error("Failed to create bridge", "channel", c.callerHandler.ID(), err)
+					c.close()
 					return
 				}
 			case <-calleeEnd.Events():
@@ -108,82 +137,80 @@ func (c *connection) handle() {
 				c.calleeHandler = nil
 				c.close()
 				return
+			case <-end.Events():
+				c.callerHandler = nil
+				c.close()
+				return
 			}
 		}
 	}()
 }
 
-func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, success, fail chan<- bool) {
-	defer func() {
-		close(fail)
-		close(success)
-		wg.Done()
-	}()
+func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, errCh chan<- error) {
+	defer wg.Done()
 
 	epReady, err := c.checkEndpoint()
 	if err != nil {
-		fail <- true
+		errCh <- err
 		return
 	}
 
 	if epReady {
-		success <- true
+		errCh <- nil
 		return
 	}
 
 	select {
 	case <-ctx.Done():
-		fail <- true
+		errCh <- errCancelled
 		return
 	case <-c.ch:
-		success <- true
+		errCh <- nil
 		return
-	case <-time.After(30 * time.Second):
-		c.close()
-		c.logger.Info("Endpoint calling timeout", "endpoint", c.callee)
-		fail <- true
+	case <-time.After(10 * time.Second):
+		errCh <- errCallTimeout
 		return
 	}
 }
 
-func (c *connection) checkEndpoint() (epReady bool, err error) {
-	ep := c.client.Endpoint()
-	eph := ep.Get(ari.NewKey(ari.EndpointKey, ari.EndpointID("PJSIP", c.callee)))
+func (c *connection) checkEndpoint() (bool, error) {
+	eph := c.client.Endpoint().Get(ari.NewKey(ari.EndpointKey, ari.EndpointID("PJSIP", c.callee)))
 
 	data, err := eph.Data()
 	if err != nil {
-		c.logger.Error("Failed to get endpoint state", "endpoint", c.callee, "error", err)
-		c.close()
-		return
+		return false, fmt.Errorf("failed to get endpoint state: %v", err)
 	}
 
 	c.logger.Info("Callee endpoint data", "endpoint", data)
 
 	if data.State == "online" {
 		if len(data.ChannelIDs) > 0 {
-			c.logger.Info("Endpoint is busy", "endpoint", c.callee)
-			c.close()
-			err = errors.New("endpoint is busy")
-		} else {
-			epReady = true
+			return false, errBusy
 		}
-		return
+		return true, nil
 	}
 
 	user, err := c.store.User().Find(c.callee)
 	if err != nil {
-		c.logger.Error("Filed to find user", "error", err)
-		c.close()
+		return false, fmt.Errorf("failed to find user: %v", err)
+	}
+
+	if err = c.pusher.Push(user.DeviceToken, c.caller, "call"); err != nil {
+		return false, fmt.Errorf("failed to push calling: %v", err)
+	}
+
+	c.calleeToken = user.DeviceToken
+	return false, nil
+}
+
+func (c *connection) pushCancel() {
+	if c.calleeToken == "" {
 		return
 	}
 
-	if err = c.pusher.Push(user.DeviceToken, c.caller); err != nil {
-		c.logger.Error("Push notification failed", "error", err)
-		c.close()
-		return
+	if err := c.pusher.Push(c.calleeToken, c.caller, "cancel"); err != nil {
+		c.logger.Error("Failed to push cancel", "endpoint", c.callee, "error", err)
 	}
-
-	return
 }
 
 func (c *connection) dial() (err error) {
@@ -198,37 +225,30 @@ func (c *connection) dial() (err error) {
 			"rtp_symmetric":   "yes",
 		},
 	})
-	if err != nil {
-		c.logger.Error("Failed to dialing", "channel", c.callerHandler.ID(), "error", err)
-		c.close()
-	}
-
 	return
 }
 
-func (c *connection) createBridge() (err error) {
-	brKey := ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
+func (c *connection) createBridge() error {
+	var (
+		err   error
+		brKey = ari.NewKey(ari.BridgeKey, rid.New(rid.Bridge))
+	)
+
 	c.bridge, err = c.client.Bridge().Create(brKey, "mixing", brKey.ID)
 	if err != nil {
-		c.logger.Error("Failed to create bridge", "channel", c.callerHandler.ID(), "error", err)
-		c.close()
-		return
+		return err
 	}
 
 	if err = c.bridge.AddChannel(c.callerHandler.ID()); err != nil {
-		c.logger.Error("Failed to add channel to bridge", "channel", c.callerHandler.ID(), "error", err)
-		c.close()
-		return
+		return fmt.Errorf("failed to add caller to bridge: %v", err)
 	}
 
 	if err = c.bridge.AddChannel(c.calleeHandler.ID()); err != nil {
-		c.logger.Error("Failed to add channel to bridge", "channel", c.calleeHandler.ID(), "error", err)
-		c.close()
-		return
+		return fmt.Errorf("failed to add callee to bridge: %v", err)
 	}
 
 	c.logger.Info("Bridge created", "bridge", c.bridge.ID())
-	return
+	return nil
 }
 
 func (c *connection) close() {

@@ -23,10 +23,10 @@ func NewPusher(certFile string) (*Pusher, error) {
 	}, nil
 }
 
-func (p *Pusher) Push(devToken, number string) error {
+func (p *Pusher) Push(devToken, number, status string) error {
 	not := &apns2.Notification{
 		DeviceToken: devToken,
-		Payload:     payload.NewPayload().Custom("status", "call").Custom("number", number),
+		Payload:     payload.NewPayload().Custom("status", status).Custom("number", number),
 		PushType:    apns2.PushTypeVOIP,
 	}
 
