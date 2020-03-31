@@ -54,9 +54,9 @@ func (c *connection) handle() {
 	defer func() {
 		wg.Wait()
 		cancel()
+		c.close()
 		close(early)
 		close(callErr)
-		c.logger.Debug("Leave handler")
 	}()
 
 	wg.Add(1)
@@ -69,10 +69,8 @@ func (c *connection) handle() {
 		case <-early:
 			return
 		case <-end.Events():
-			c.logger.Debug("Push cancel")
-			c.pushCancel()
+			end.Cancel()
 			c.callerHandler = nil
-			c.close()
 			cancel()
 			return
 		}
@@ -84,15 +82,16 @@ func (c *connection) handle() {
 	if err := <-callErr; err != nil {
 		switch err {
 		case errCancelled:
-			fallthrough
+			c.pushCancel()
 		case errCallTimeout:
+			c.pushCancel()
 			fallthrough
 		case errBusy:
-			c.logger.Info("Call endpoint failed", "endpoint", c.callee, "reason", err)
+			c.logger.Info("Call endpoint failed", "channel", c.callerHandler.ID(), "reason", err)
 		default:
-			c.logger.Error("Call endpoint failed", "endpoint", c.callee, "error", err)
+			c.logger.Error("Call endpoint failed", "channel", c.callerHandler.ID(), "error", err)
 		}
-		c.close()
+		cancel()
 		return
 	}
 
@@ -100,7 +99,6 @@ func (c *connection) handle() {
 
 	if err := c.dial(); err != nil {
 		c.logger.Error("Failed to dialing", "channel", c.callerHandler.ID(), "error", err)
-		c.close()
 		return
 	}
 
@@ -119,27 +117,25 @@ func (c *connection) handle() {
 			case <-calleeStart.Events():
 				if err := c.callerHandler.Answer(); err != nil {
 					c.logger.Error("failed to answer call", "channel", c.callerHandler.ID(), "error", err)
-					c.close()
 					return
 				}
 
 				if err := c.createBridge(); err != nil {
 					c.logger.Error("Failed to create bridge", "channel", c.callerHandler.ID(), err)
-					c.close()
 					return
 				}
 			case <-calleeEnd.Events():
+				calleeEnd.Cancel()
 				c.calleeHandler = nil
-				c.close()
 				return
 			case <-hangup.Events():
-				c.logger.Info("Callee sent hangup", "endpoint", c.callee)
+				c.logger.Info("Callee sent hangup", "channel", c.callerHandler.ID(), "callee", c.callee)
+				hangup.Cancel()
 				c.calleeHandler = nil
-				c.close()
 				return
 			case <-end.Events():
+				end.Cancel()
 				c.callerHandler = nil
-				c.close()
 				return
 			}
 		}
@@ -149,13 +145,13 @@ func (c *connection) handle() {
 func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, errCh chan<- error) {
 	defer wg.Done()
 
-	epReady, err := c.checkEndpoint()
+	ready, err := c.checkEndpoint()
 	if err != nil {
 		errCh <- err
 		return
 	}
 
-	if epReady {
+	if ready {
 		errCh <- nil
 		return
 	}
@@ -209,7 +205,7 @@ func (c *connection) pushCancel() {
 	}
 
 	if err := c.pusher.Push(c.calleeToken, c.caller, "cancel"); err != nil {
-		c.logger.Error("Failed to push cancel", "endpoint", c.callee, "error", err)
+		c.logger.Error("Failed to push cancel", "channel", c.callerHandler.ID(), "error", err)
 	}
 }
 
@@ -247,7 +243,8 @@ func (c *connection) createBridge() error {
 		return fmt.Errorf("failed to add callee to bridge: %v", err)
 	}
 
-	c.logger.Info("Bridge created", "bridge", c.bridge.ID())
+	c.logger.Info("Bridge created", "channel", c.calleeHandler.ID(), "bridge", c.bridge.ID())
+
 	return nil
 }
 
