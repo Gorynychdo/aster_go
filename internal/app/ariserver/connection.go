@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -254,14 +256,17 @@ func (c *connection) createBridge() error {
 
 	c.logger.Info("Bridge created", "channel", c.callerHandler.ID(), "bridge", c.bridge.ID())
 
-	c.callerRec, err = c.bridge.Record("caller_"+now, recOpts)
+	callerPath := path.Join(c.config.RecPath, c.caller, now)
+	calleePath := path.Join(c.config.RecPath, strings.Replace(c.callee, "int_", "", 1))
+
+	c.callerRec, err = c.bridge.Record(callerPath, recOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create caller recorder: %v", err)
 	}
 
 	c.logger.Info("Caller recorder created", "bridge", c.bridge.ID(), "recorder", c.callerRec.ID())
 
-	c.calleeRec, err = c.bridge.Record("callee_"+now, recOpts)
+	c.calleeRec, err = c.bridge.Record(calleePath, recOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create callee recorder: %v", err)
 	}

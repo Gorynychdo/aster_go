@@ -8,6 +8,7 @@ type Config struct {
 	WebsocketURL string `toml:"websocket_url"`
 	DatabaseURL  string `toml:"database_url"`
 	CertFile     string `toml:"cert_file"`
+	RecPath      string `toml:"rec_path"`
 }
 
 func NewConfig() *Config {
@@ -19,5 +20,6 @@ func NewConfig() *Config {
 		WebsocketURL: "ws://localhost:8088/ari/events",
 		DatabaseURL:  "host=localhost dbname=test sslmode=disable",
 		CertFile:     "configs/cert.pem",
+		RecPath:      "/var/spool/asterisk/recording",
 	}
 }
