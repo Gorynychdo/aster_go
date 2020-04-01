@@ -275,18 +275,6 @@ func (c *connection) createBridge() error {
 }
 
 func (c *connection) close() {
-	if c.callerRec != nil {
-		if err := c.callerRec.Stop(); err != nil {
-			c.logger.Error("Failed to stop caller recorder", "recorder", c.callerRec.ID())
-		}
-	}
-
-	if c.calleeRec != nil {
-		if err := c.calleeRec.Stop(); err != nil {
-			c.logger.Error("Failed to stop callee recorder", "recorder", c.calleeRec.ID())
-		}
-	}
-
 	if c.bridge != nil {
 		if err := c.bridge.Delete(); err != nil {
 			c.logger.Error("Bridge destroy failed", "bridge", c.bridge.ID(), "error", err)
