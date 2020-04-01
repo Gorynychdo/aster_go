@@ -23,7 +23,7 @@ type connection struct {
 	caller        string
 	callee        string
 	calleeToken   string
-	connect       chan bool
+	connect       chan struct{}
 	callerHandler *ari.ChannelHandle
 	calleeHandler *ari.ChannelHandle
 	bridge        *ari.BridgeHandle
@@ -37,7 +37,7 @@ func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection 
 		callerHandler: ch,
 		caller:        args[0],
 		callee:        args[1],
-		connect:       make(chan bool, 1),
+		connect:       make(chan struct{}),
 	}
 
 	c.logger.Info("Calling", "channel", c.callerHandler.ID(), "caller", c.caller, "callee", c.callee)
@@ -60,6 +60,7 @@ func (c *connection) handle() {
 		c.close()
 		close(early)
 		close(callErr)
+		c.logger.Debug("Leave handler")
 	}()
 
 	wg.Add(1)
@@ -203,6 +204,7 @@ func (c *connection) checkEndpoint() (bool, error) {
 }
 
 func (c *connection) pushCancel() {
+	c.logger.Debug("Push cancel")
 	if c.calleeToken == "" {
 		return
 	}
