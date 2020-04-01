@@ -257,7 +257,7 @@ func (c *connection) createBridge() error {
 	c.logger.Info("Bridge created", "channel", c.callerHandler.ID(), "bridge", c.bridge.ID())
 
 	callerPath := path.Join(c.config.RecPath, c.caller, now)
-	calleePath := path.Join(c.config.RecPath, strings.Replace(c.callee, "int_", "", 1))
+	calleePath := path.Join(c.config.RecPath, strings.Replace(c.callee, "int_", "", 1), now)
 
 	c.callerRec, err = c.bridge.Record(callerPath, recOpts)
 	if err != nil {
