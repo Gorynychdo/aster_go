@@ -189,16 +189,16 @@ func (c *connection) checkEndpoint() (bool, error) {
 		return true, nil
 	}
 
-	user, err := c.store.User().Find(c.callee)
-	if err != nil {
-		return false, fmt.Errorf("failed to find user: %v", err)
-	}
+	// user, err := c.store.User().Find(c.callee)
+	// if err != nil {
+	// 	return false, fmt.Errorf("failed to find user: %v", err)
+	// }
 
-	if err = c.pusher.Push(user.DeviceToken, c.caller, "call"); err != nil {
-		return false, fmt.Errorf("failed to push calling: %v", err)
-	}
+	// if err = c.pusher.Push(user.DeviceToken, c.caller, "call"); err != nil {
+	// 	return false, fmt.Errorf("failed to push calling: %v", err)
+	// }
 
-	c.calleeToken = user.DeviceToken
+	// c.calleeToken = user.DeviceToken
 	return false, nil
 }
 
