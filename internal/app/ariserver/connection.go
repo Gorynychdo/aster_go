@@ -256,17 +256,15 @@ func (c *connection) createBridge() error {
 
 	c.logger.Info("Bridge created", "channel", c.callerHandler.ID(), "bridge", c.bridge.ID())
 
-	callerPath := path.Join(c.config.RecPath, c.caller, now)
-	calleePath := path.Join(c.config.RecPath, strings.Replace(c.callee, "int_", "", 1), now)
 
-	c.callerRec, err = c.bridge.Record(callerPath, recOpts)
+	c.callerRec, err = c.bridge.Record(path.Join(c.caller, now), recOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create caller recorder: %v", err)
 	}
 
 	c.logger.Info("Caller recorder created", "bridge", c.bridge.ID(), "recorder", c.callerRec.ID())
 
-	c.calleeRec, err = c.bridge.Record(calleePath, recOpts)
+	c.calleeRec, err = c.bridge.Record(path.Join(strings.Replace(c.callee, "int_", "", 1), now), recOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create callee recorder: %v", err)
 	}
