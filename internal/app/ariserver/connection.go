@@ -50,7 +50,7 @@ func (c *connection) handle() {
 		wg          sync.WaitGroup
 		ctx, cancel = context.WithCancel(context.Background())
 		end         = c.callerHandler.Subscribe(ari.Events.StasisEnd)
-		early       = make(chan bool, 1)
+		early       = make(chan struct{})
 		callErr     = make(chan error, 1)
 	)
 
@@ -58,7 +58,6 @@ func (c *connection) handle() {
 		wg.Wait()
 		cancel()
 		c.close()
-		close(early)
 		close(callErr)
 		c.logger.Debug("Leave handler")
 	}()
@@ -99,7 +98,7 @@ func (c *connection) handle() {
 		return
 	}
 
-	early <- true
+	close(early)
 
 	if err := c.dial(); err != nil {
 		c.logger.Error("Failed to dialing", "channel", c.callerHandler.ID(), "error", err)
@@ -167,7 +166,7 @@ func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, errCh
 	case <-c.connect:
 		errCh <- nil
 		return
-	case <-time.After(60 * time.Second):
+	case <-time.After(10 * time.Second):
 		errCh <- errCallTimeout
 		return
 	}
