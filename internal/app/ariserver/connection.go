@@ -276,8 +276,8 @@ func (c *connection) createBridge() error {
 
 	c.logger.Info("Callee recorder created", "bridge", c.bridge.ID(), "recorder", c.calleeRec.ID())
 
-	c.callerRPath = callerRPath
-	c.calleeRPath = calleeRPath
+	c.callerRPath = strings.Join([]string{callerRPath, "wav"}, ".")
+	c.calleeRPath = strings.Join([]string{calleeRPath, "wav"}, ".")
 
 	return nil
 }
@@ -314,7 +314,7 @@ func (c *connection) close() {
 		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.calleeRPath); err != nil {
 			c.logger.Error("Failed to copy callee record", "record", c.calleeRPath, "error", err)
 		} else {
-			c.logger.Info("Record copied", "record", )
+			c.logger.Info("Record copied", "record", c.calleeRPath)
 		}
 	}
 
