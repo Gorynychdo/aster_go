@@ -4,6 +4,11 @@ import (
     "io"
     "os"
     "path"
+    "strings"
+    "time"
+
+    "github.com/Gorynychdo/aster_go/internal/app/model"
+    "github.com/Gorynychdo/aster_go/internal/app/store"
 )
 
 func Copy(dest, source, file string) error {
@@ -24,4 +29,20 @@ func Copy(dest, source, file string) error {
     return nil
 }
 
+func Persists(st *store.Store, endpoint, file string) (int, error) {
+    if strings.HasPrefix(endpoint, "int_") {
+        endpoint = strings.Replace(endpoint, "int_", "", 1)
+    }
 
+    rec := &model.Record{
+        Endpoint: endpoint,
+        FileName: path.Base(file),
+        Created:  time.Now(),
+    }
+
+    if err := st.Record().Create(rec); err != nil {
+        return 0, err
+    }
+
+    return rec.ID, nil
+}

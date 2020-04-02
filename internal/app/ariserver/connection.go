@@ -306,7 +306,12 @@ func (c *connection) close() {
 		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.callerRPath); err != nil {
 			c.logger.Error("Failed to copy caller record", "record", c.callerRPath, "error", err)
 		} else {
-			c.logger.Info("Record copied", "record", c.callerRPath)
+			id, err := records.Persists(c.store, c.caller, c.callerRPath)
+			if err !=  nil {
+				c.logger.Error("Failed to persist record", "record", c.callerRPath, "error", err)
+			} else {
+				c.logger.Info("Record complete", "record", c.callerRPath, "id", id)
+			}
 		}
 	}
 
@@ -314,7 +319,13 @@ func (c *connection) close() {
 		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.calleeRPath); err != nil {
 			c.logger.Error("Failed to copy callee record", "record", c.calleeRPath, "error", err)
 		} else {
-			c.logger.Info("Record copied", "record", c.calleeRPath)
+			id, err := records.Persists(c.store, c.callee, c.calleeRPath)
+			if err != nil {
+				c.logger.Error("Failed to persist record", "record", c.calleeRPath, "error", err)
+			} else {
+				c.logger.Info("Record complete", "record", c.calleeRPath, "id", id)
+			}
+
 		}
 	}
 
