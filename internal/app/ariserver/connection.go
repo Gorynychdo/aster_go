@@ -305,27 +305,20 @@ func (c *connection) close() {
 	if c.callerRPath != "" {
 		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.callerRPath); err != nil {
 			c.logger.Error("Failed to copy caller record", "record", c.callerRPath, "error", err)
+		} else if err := records.Persists(c.store, c.caller, c.callerRPath); err != nil {
+			c.logger.Error("Failed to persist caller record", "record", c.callerRPath, "error", err)
 		} else {
-			id, err := records.Persists(c.store, c.caller, c.callerRPath)
-			if err !=  nil {
-				c.logger.Error("Failed to persist record", "record", c.callerRPath, "error", err)
-			} else {
-				c.logger.Info("Record complete", "record", c.callerRPath, "id", id)
-			}
+			c.logger.Info("Caller record complete", "record", c.callerRPath, "id", id)
 		}
 	}
 
 	if c.calleeRPath != "" {
 		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.calleeRPath); err != nil {
 			c.logger.Error("Failed to copy callee record", "record", c.calleeRPath, "error", err)
+		} else if err := records.Persists(c.store, c.callee, c.calleeRPath); err != nil {
+			c.logger.Error("Failed to persist callee record", "record", c.calleeRPath, "error", err)
 		} else {
-			id, err := records.Persists(c.store, c.callee, c.calleeRPath)
-			if err != nil {
-				c.logger.Error("Failed to persist record", "record", c.calleeRPath, "error", err)
-			} else {
-				c.logger.Info("Record complete", "record", c.calleeRPath, "id", id)
-			}
-
+			c.logger.Info("Callee record complete", "record", c.calleeRPath, "id", id)
 		}
 	}
 

@@ -7,7 +7,7 @@ type RecordRepository struct {
 }
 
 func (r *RecordRepository) Create(rec *model.Record) error {
-    return r.store.db.QueryRow(
+    _, err:= r.store.db.Query(
         `INSERT INTO records
             (account_id, wav_file_name, creation_time, complete_time)
         VALUES ((SELECT id from users WHERE tel = ?), ?, ?, ?)`,
@@ -15,5 +15,7 @@ func (r *RecordRepository) Create(rec *model.Record) error {
         rec.FileName,
         rec.Created,
         rec.Created,
-    ).Scan(&rec.ID)
+    )
+
+    return err
 }

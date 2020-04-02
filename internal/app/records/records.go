@@ -29,7 +29,7 @@ func Copy(dest, source, file string) error {
     return nil
 }
 
-func Persists(st *store.Store, endpoint, file string) (int, error) {
+func Persists(st *store.Store, endpoint, file string) error {
     if strings.HasPrefix(endpoint, "int_") {
         endpoint = strings.Replace(endpoint, "int_", "", 1)
     }
@@ -40,9 +40,5 @@ func Persists(st *store.Store, endpoint, file string) (int, error) {
         Created:  time.Now(),
     }
 
-    if err := st.Record().Create(rec); err != nil {
-        return 0, err
-    }
-
-    return rec.ID, nil
+    return st.Record().Create(rec)
 }
