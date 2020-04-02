@@ -64,7 +64,6 @@ func (c *connection) handle() {
 		cancel()
 		c.close()
 		close(callErr)
-		c.logger.Debug("Leave handler")
 	}()
 
 	wg.Add(1)
@@ -171,7 +170,7 @@ func (c *connection) callEndpoint(ctx context.Context, wg *sync.WaitGroup, errCh
 	case <-c.connect:
 		errCh <- nil
 		return
-	case <-time.After(10 * time.Second):
+	case <-time.After(60 * time.Second):
 		errCh <- errCallTimeout
 		return
 	}
@@ -194,16 +193,16 @@ func (c *connection) checkEndpoint() (bool, error) {
 		return true, nil
 	}
 
-	// user, err := c.store.User().Find(c.callee)
-	// if err != nil {
-	// 	return false, fmt.Errorf("failed to find user: %v", err)
-	// }
+	user, err := c.store.User().Find(c.callee)
+	if err != nil {
+		return false, fmt.Errorf("failed to find user: %v", err)
+	}
 
-	// if err = c.pusher.Push(user.DeviceToken, c.caller, "call"); err != nil {
-	// 	return false, fmt.Errorf("failed to push calling: %v", err)
-	// }
+	if err = c.pusher.Push(user.DeviceToken, c.caller, "call"); err != nil {
+		return false, fmt.Errorf("failed to push calling: %v", err)
+	}
 
-	// c.calleeToken = user.DeviceToken
+	c.calleeToken = user.DeviceToken
 	return false, nil
 }
 
