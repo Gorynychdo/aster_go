@@ -12,6 +12,7 @@ import (
 
 	"github.com/CyCoreSystems/ari/v5"
 	"github.com/CyCoreSystems/ari/v5/rid"
+	"github.com/Gorynychdo/aster_go/internal/app/records"
 )
 
 var (
@@ -31,6 +32,8 @@ type connection struct {
 	bridge        *ari.BridgeHandle
 	callerRec     *ari.LiveRecordingHandle
 	calleeRec     *ari.LiveRecordingHandle
+	callerRPath   string
+	calleeRPath   string
 }
 
 func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection {
@@ -256,20 +259,25 @@ func (c *connection) createBridge() error {
 
 	c.logger.Info("Bridge created", "channel", c.callerHandler.ID(), "bridge", c.bridge.ID())
 
+	callerRPath := path.Join(c.caller, now)
+	calleeRPath := path.Join(strings.Replace(c.callee, "int_", "", 1), now)
 
-	c.callerRec, err = c.bridge.Record(path.Join(c.caller, now), recOpts)
+	c.callerRec, err = c.bridge.Record(callerRPath, recOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create caller recorder: %v", err)
 	}
 
 	c.logger.Info("Caller recorder created", "bridge", c.bridge.ID(), "recorder", c.callerRec.ID())
 
-	c.calleeRec, err = c.bridge.Record(path.Join(strings.Replace(c.callee, "int_", "", 1), now), recOpts)
+	c.calleeRec, err = c.bridge.Record(calleeRPath, recOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create callee recorder: %v", err)
 	}
 
 	c.logger.Info("Callee recorder created", "bridge", c.bridge.ID(), "recorder", c.calleeRec.ID())
+
+	c.callerRPath = callerRPath
+	c.calleeRPath = calleeRPath
 
 	return nil
 }
@@ -291,6 +299,22 @@ func (c *connection) close() {
 	if c.calleeHandler != nil {
 		if err := c.calleeHandler.Hangup(); err != nil {
 			c.logger.Error("Callee hangup failed", "channel", c.calleeHandler.ID(), "error", err)
+		}
+	}
+
+	if c.callerRPath != "" {
+		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.callerRPath); err != nil {
+			c.logger.Error("Failed to copy caller record", "record", c.callerRPath, "error", err)
+		} else {
+			c.logger.Info("Record copied", "record", c.callerRPath)
+		}
+	}
+
+	if c.calleeRPath != "" {
+		if err := records.Copy(c.config.RecPath, c.config.SpoolPath, c.calleeRPath); err != nil {
+			c.logger.Error("Failed to copy callee record", "record", c.calleeRPath, "error", err)
+		} else {
+			c.logger.Info("Record copied", "record", )
 		}
 	}
 
