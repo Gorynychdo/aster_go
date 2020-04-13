@@ -10,6 +10,7 @@ type Config struct {
 	CertFile     string `toml:"cert_file"`
 	SpoolPath    string `toml:"spool_path"`
 	RecPath      string `toml:"rec_path"`
+	RecDir       string `toml:"rec_dir"`
 }
 
 func NewConfig() *Config {
@@ -23,5 +24,6 @@ func NewConfig() *Config {
 		CertFile:     "configs/cert.pem",
 		SpoolPath:    "/var/spool/asterisk/recording",
 		RecPath:      "/tmp/records",
+		RecDir:       "",
 	}
 }
