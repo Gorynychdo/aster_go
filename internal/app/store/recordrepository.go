@@ -14,7 +14,7 @@ func (r *RecordRepository) Create(rec *model.Record) error {
             creation_time,
             complete_time,
             interlocutor_number,
-            confirmed,
+            confirmed
         ) VALUES ((SELECT id from users WHERE tel = ?), ?, ?, ?, ?, 1)`,
         rec.Endpoint,
         rec.FileName,
