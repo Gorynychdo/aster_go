@@ -29,15 +29,20 @@ func Copy(dest, source, file string) error {
     return nil
 }
 
-func Persists(st *store.Store, endpoint, file string) error {
+func Persists(st *store.Store, endpoint, interlocutor, file string) error {
     if strings.HasPrefix(endpoint, "int_") {
         endpoint = strings.Replace(endpoint, "int_", "", 1)
     }
 
+    if strings.HasPrefix(interlocutor, "int_") {
+        interlocutor = strings.Replace(interlocutor, "int_", "", 1)
+    }
+
     rec := &model.Record{
-        Endpoint: endpoint,
-        FileName: path.Base(file),
-        Created:  time.Now(),
+        Endpoint:     endpoint,
+        FileName:     path.Base(file),
+        Interlocutor: interlocutor,
+        Created:      time.Now(),
     }
 
     return st.Record().Create(rec)
