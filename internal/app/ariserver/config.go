@@ -11,6 +11,7 @@ type Config struct {
 	SpoolPath    string `toml:"spool_path"`
 	RecPath      string `toml:"rec_path"`
 	RecDir       string `toml:"rec_dir"`
+	LogPath      string `toml:"log_path"`
 }
 
 func NewConfig() *Config {
@@ -25,5 +26,6 @@ func NewConfig() *Config {
 		SpoolPath:    "/var/spool/asterisk/recording",
 		RecPath:      "/tmp/records",
 		RecDir:       "",
+		LogPath:      "/var/log/ariserver",
 	}
 }

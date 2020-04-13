@@ -28,7 +28,7 @@ func newServer(config *Config, store *store.Store) (*server, error) {
 	}
 
 	s.logger.SetHandler(log15.MultiHandler(
-		log15.Must.FileHandler("logs/app.log", log15.LogfmtFormat()),
+		log15.Must.FileHandler(s.config.LogPath, log15.LogfmtFormat()),
 		log15.StderrHandler),
 	)
 
