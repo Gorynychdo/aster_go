@@ -37,11 +37,16 @@ type connection struct {
 }
 
 func newConnection(s *server, ch *ari.ChannelHandle, args []string) *connection {
+	callee := args[1]
+	if strings.HasPrefix(callee, "int_89") && len(callee) == 15 {
+		callee = strings.Replace(callee, "int_8", "int_7", 1)
+	}
+
 	c := &connection{
 		server:        s,
 		callerHandler: ch,
 		caller:        args[0],
-		callee:        args[1],
+		callee:        callee,
 		connect:       make(chan struct{}),
 	}
 
@@ -207,7 +212,6 @@ func (c *connection) checkEndpoint() (bool, error) {
 }
 
 func (c *connection) pushCancel() {
-	c.logger.Debug("Push cancel")
 	if c.calleeToken == "" {
 		return
 	}
